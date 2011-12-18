@@ -43,13 +43,17 @@ namespace node {
 
 class Isolate {
 public:
+  char** argv_;
+  int argc_;
+  uv_thread_t tid_;
+
   // Call this before instantiating any Isolate
   static void Initialize();
   static int Count();
 
   typedef void (*AtExitCallback)(void* arg);
 
-  static Isolate* New();
+  static void JoinAll();
 
   static Isolate* GetCurrent() {
     return reinterpret_cast<Isolate*>(v8::Isolate::GetCurrent()->GetData());
@@ -82,8 +86,19 @@ public:
 
   unsigned int id_;
 
-private:
+  // This constructor is used for every non-main thread
   Isolate();
+
+  ~Isolate() {
+    if (argv_) {
+      delete argv_;
+    }
+  }
+
+  void Enter();
+  void Exit();
+
+private:
 
   struct AtExitCallbackInfo {
     ngx_queue_t at_exit_callbacks_;
@@ -101,6 +116,11 @@ private:
 
   // Global variables for this isolate.
   struct globals globals_;
+  
+  // This is used to lock the isolate while the new thread boots. If anyone
+  // calls isolate->join() before then - it will wait until the thread has
+  // started.
+  uv_mutex_t lock_;
 };
 
 } // namespace node

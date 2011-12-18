@@ -46,17 +46,37 @@ void Isolate::Initialize() {
 }
 
 
-Isolate* Isolate::New() {
-  return new Isolate();
-}
-
-
 int Isolate::Count() {
   return isolate_count;
 }
 
 
+void Isolate::JoinAll() {
+  uv_mutex_lock(&list_lock);
+
+  while (ngx_queue_empty(&list_head) == false) {
+    ngx_queue_t* q = ngx_queue_head(&list_head);
+    Isolate* isolate = ngx_queue_data(q, Isolate, list_member_);
+
+    // Unlock the list while we join the thread.
+    uv_mutex_unlock(&list_lock);
+
+    uv_thread_join(&isolate->tid_);
+    printf("join isolate %d\n", isolate->id_);
+
+    // Relock to check the next element in the list.
+    uv_mutex_lock(&list_lock);
+  }
+
+  // Unlock the list finally.
+  uv_mutex_unlock(&list_lock);
+}
+
+
 Isolate::Isolate() {
+  uv_mutex_init(&lock_);
+  uv_mutex_lock(&lock_);
+
   uv_mutex_lock(&list_lock);
 
   assert(initialized && "node::Isolate::Initialize() hasn't been called");
@@ -79,19 +99,15 @@ Isolate::Isolate() {
 
   uv_mutex_unlock(&list_lock);
 
-  v8_isolate_ = v8::Isolate::GetCurrent();
-  if (v8_isolate_ == NULL) {
-    v8_isolate_ = v8::Isolate::New();
-    v8_isolate_->Enter();
-  }
-
+  v8_isolate_ = v8::Isolate::New();
   assert(v8_isolate_->GetData() == NULL);
   v8_isolate_->SetData(this);
 
   v8_context_ = v8::Context::New();
-  v8_context_->Enter();
 
+  Enter();
   globals_init(&globals_);
+  Exit();
 }
 
 
@@ -109,6 +125,17 @@ void Isolate::AtExit(AtExitCallback callback, void* arg) {
   it->arg_ = arg;
 
   ngx_queue_insert_head(&at_exit_callbacks_, &it->at_exit_callbacks_);
+}
+
+
+void Isolate::Enter() {
+  v8_isolate_->Enter();
+  v8_context_->Enter();
+}
+
+void Isolate::Exit() {
+  v8_context_->Exit();
+  v8_isolate_->Exit();
 }
 
 
